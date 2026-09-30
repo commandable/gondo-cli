@@ -22,7 +22,7 @@ test('the published artifact works without an app checkout', async (t) => {
   assert.deepEqual(packed.files.map(file => file.path).sort(), [
     'README.md', 'bin/gondo.mjs', 'gondo.env.example', 'package.json', 'src/cli.mjs',
   ])
-  await exec(npm, ['install', '--prefix', directory, '--offline', '--ignore-scripts', '--no-audit', '--no-fund', join(directory, packed.filename)])
+  await exec(npm, ['install', '--prefix', directory, '--prefer-offline', '--ignore-scripts', '--no-audit', '--no-fund', join(directory, packed.filename)])
 
   // Exercise the npm-created executable, including its symlink on Unix.
   const bin = process.platform === 'win32'
