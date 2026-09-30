@@ -1,0 +1,88 @@
+# Gondo CLI
+
+Give a coding agent access to [Gondo](https://www.gondo.ai) to create employees, build and test their jobs, and inspect results. The CLI calls Gondo's HTTP API and loads its current authoring guide from the service.
+
+Requires **Node.js 22.12 or later** and a Gondo API key. API access is currently a private trial for allowlisted accounts with Pro, an active Pro trial, or complimentary Pro. Installing the CLI does not enable API access.
+
+## Get started
+
+1. In Gondo, open **Account → API keys** and create a key. This requires an account admin. Copy the account ID and runtime URL shown there too.
+2. Save those values in a local file called `gondo.env`, outside your source repository:
+
+   ```dotenv
+   GONDO_API_URL=https://runtime.gondo.ai
+   GONDO_ACCOUNT_ID=your-account-id
+   GONDO_API_KEY=your-api-key
+   ```
+
+3. From any directory, read the guide:
+
+   ```bash
+   npx --yes gondo --env-file /absolute/path/to/gondo.env guide
+   ```
+
+No Gondo app checkout is needed. To install a persistent `gondo` command instead:
+
+```bash
+npm install --global gondo
+gondo --env-file /absolute/path/to/gondo.env guide
+```
+
+`--env-file` accepts dotenv syntax, including quoted values. Existing environment variables take precedence over the file. If all three variables are already set in your agent's environment, omit the flag. The CLI never loads an env file implicitly.
+
+Keep the key out of prompts, source control, and shared logs. Give your agent the local env-file path, not the key text. Required integrations must already be connected or enabled in Gondo; enable Public browsing for public websites.
+
+## Give this to your agent
+
+Use a coding agent with terminal access, such as Codex or Claude Code. Replace the task and local file path:
+
+> Use Gondo to build an employee that **[describe the task]**. Your credentials are in **[/absolute/path/to/gondo.env]**; do not print them. Start by running `npx --yes gondo --env-file /absolute/path/to/gondo.env guide`. Read the workflow and node guides as directed, then inspect the available integrations. Create a new employee and job, validate it, test with **[agreed inputs]**, and inspect the actual run output. Publish the new job while leaving it disabled for my review. Do not change existing jobs or send messages unless my task explicitly requires it. Report the employee and job IDs and the test results.
+
+Commands shown as `gondo …` in the served guide can all be run as `npx --yes gondo --env-file /absolute/path/to/gondo.env …`. If an older guide mentions `pnpm gondo` or the app checkout, use this npm command instead.
+
+## Useful commands
+
+After a global install, with credentials in `gondo.env`:
+
+```bash
+gondo --env-file ./gondo.env guide --topic workflows
+gondo --env-file ./gondo.env guide --topic nodes
+gondo --env-file ./gondo.env list /integrations
+gondo --env-file ./gondo.env employees list
+gondo --env-file ./gondo.env workflows list
+gondo --help
+gondo --version
+```
+
+The command name remains `workflows`; Gondo calls them jobs in the app. The guide documents authoring, execution, file upload/download, resumable workspaces, browser login handoffs, and run inspection. Human approvals are completed by a signed-in person in Gondo.
+
+API responses are JSON. Exit codes: **0** success, **1** failure, **2** user action required. Tests and investigation code execute real actions through your connected integrations. The CLI does not retry mutations automatically; inspect the run or execution after a timeout before trying again.
+
+## Development and publishing
+
+This repository owns the standalone CLI. Workflow schemas, authoring guides, and authorization remain in the Gondo service. The initial client was extracted from the app's existing operator CLI; it has one runtime dependency and no build step.
+
+```bash
+npm ci
+npm test
+```
+
+Tests exercise the packed npm artifact installed in a separate temporary directory, including its executable, env-file loading, HTTP authentication, and YAML requests. No Gondo credentials or live account are required.
+
+To publish the prepared `0.1.0` release from this repository:
+
+```bash
+npm login
+npm whoami
+npm pack --dry-run
+npm publish --access public
+```
+
+Publishing runs the tests again. Complete npm's authentication/2FA prompt when requested. Then verify the registry install from any other directory:
+
+```bash
+npx --yes gondo@0.1.0 --version
+npx --yes gondo@0.1.0 --env-file /absolute/path/to/gondo.env guide
+```
+
+`0.1.0` is prepared for its first publication; it is not published by creating or pushing this repository. The npm name was unregistered when checked, but the registry makes the final availability decision at publish time. Future releases need a new version number. The package is public with no open-source license grant (`UNLICENSED`).
