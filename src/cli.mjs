@@ -10,7 +10,8 @@ import { parseDocument } from 'yaml'
 
 export const HELP = `Gondo account operator CLI
 
-Configure GONDO_API_URL (runtime URL), GONDO_ACCOUNT_ID, GONDO_API_KEY.
+Set GONDO_API_KEY. The production URL and your key's account are automatic.
+Optional overrides: GONDO_API_URL (development runtime), GONDO_ACCOUNT_ID.
 Load a local env file with: gondo --env-file ./gondo.env guide
 Use gondo --version to show the installed CLI version.
 Account admins create keys in Account Settings. Never put a key in source code.
@@ -337,7 +338,7 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
     if (request.envFile)
       env = { ...parseEnv(await readFile(request.envFile, 'utf8')), ...env }
 
-    const base = new URL(required(env.GONDO_API_URL, 'GONDO_API_URL'))
+    const base = new URL(env.GONDO_API_URL || 'https://runtime.gondo.ai')
 
     if (base.protocol !== 'https:' && !(base.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname)))
       throw new Error('GONDO_API_URL must use HTTPS, or HTTP on localhost for development')
@@ -345,12 +346,12 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
     if (base.username || base.password || base.search || base.hash)
       throw new Error('GONDO_API_URL must not include credentials, a query, or a fragment')
 
-    const account = segment(env.GONDO_ACCOUNT_ID, 'GONDO_ACCOUNT_ID')
+    let account = env.GONDO_ACCOUNT_ID === undefined ? undefined : segment(env.GONDO_ACCOUNT_ID, 'GONDO_ACCOUNT_ID')
 
     const key = required(env.GONDO_API_KEY, 'GONDO_API_KEY')
 
-    const send = async (next) => {
-      const url = new URL(`/api/accounts/${account}${next.path}`, base)
+    const send = async (next, { accountScoped = true } = {}) => {
+      const url = new URL(accountScoped ? `/api/accounts/${account}${next.path}` : next.path, base)
 
       for (const [name, value] of Object.entries(next.query ?? {}))
         url.searchParams.set(name, value)
@@ -409,6 +410,13 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
       stderr.write(`${JSON.stringify({ status: response.status, ...result })}\n`)
 
       return true
+    }
+
+    if (!account) {
+      const identity = await send({ path: '/api/operator/me', method: 'GET' }, { accountScoped: false })
+      if (failed(identity))
+        return 1
+      account = segment(identity.result?.accountId, 'API key account ID')
     }
 
     const download = async (sessionId, file, directory) => {

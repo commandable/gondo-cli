@@ -6,12 +6,10 @@ Requires **Node.js 22.12 or later** and a Gondo API key. API access is currently
 
 ## Get started
 
-1. In Gondo, open **Account → API keys** and create a key. This requires an account admin. Copy the account ID and runtime URL shown there too.
-2. Save those values in a local file called `gondo.env`, outside your source repository:
+1. In Gondo, open **Account → API keys** and create a key. This requires an account admin. The key is all your agent needs.
+2. Save the key in a local file called `gondo.env`, outside your source repository:
 
    ```dotenv
-   GONDO_API_URL=https://runtime.gondo.ai
-   GONDO_ACCOUNT_ID=your-account-id
    GONDO_API_KEY=your-api-key
    ```
 
@@ -28,7 +26,7 @@ npm install --global gondo
 gondo --env-file /absolute/path/to/gondo.env guide
 ```
 
-`--env-file` accepts dotenv syntax, including quoted values. Existing environment variables take precedence over the file. If all three variables are already set in your agent's environment, omit the flag. The CLI never loads an env file implicitly.
+`--env-file` accepts dotenv syntax, including quoted values. Existing environment variables take precedence over the file. If `GONDO_API_KEY` is already set in your agent's environment, omit the flag. The CLI never loads an env file implicitly. It connects to `https://runtime.gondo.ai` and discovers the account belonging to your key automatically. For development, set `GONDO_API_URL` to another runtime; `GONDO_ACCOUNT_ID` remains an optional override for existing setups. Overrides do not change which account a key can access.
 
 Keep the key out of prompts, source control, and shared logs. Give your agent the local env-file path, not the key text. Required integrations must already be connected or enabled in Gondo; enable Public browsing for public websites.
 
@@ -59,6 +57,8 @@ The command name remains `workflows`; Gondo calls them jobs in the app. The guid
 API responses are JSON. Exit codes: **0** success, **1** failure, **2** user action required. Tests and investigation code execute real actions through your connected integrations. The CLI does not retry mutations automatically; inspect the run or execution after a timeout before trying again.
 
 ## Development and publishing
+
+The service must support `GET /api/operator/me` before publishing this key-only CLI release. That endpoint authenticates the key and returns its account; the existing allowlist and Pro requirements still apply.
 
 This repository owns the standalone CLI. Workflow schemas, authoring guides, and authorization remain in the Gondo service. The initial client was extracted from the app's existing operator CLI; it has one runtime dependency and no build step.
 
