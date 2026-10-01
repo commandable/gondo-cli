@@ -45,17 +45,22 @@ test('the published artifact works without an app checkout', async (t) => {
     for await (const chunk of request) body += chunk
     requests.push({ url: request.url, method: request.method, authorization: request.headers.authorization, body: body ? JSON.parse(body) : undefined })
     response.setHeader('Content-Type', 'application/json')
-    response.end(JSON.stringify({ ok: true, guide: 'Read the workflow and node guides.' }))
+    response.end(JSON.stringify(request.url === '/api/operator/me'
+      ? { accountId: 'trial-account' }
+      : { ok: true, guide: 'Read the workflow and node guides.' }))
   })
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
   t.after(() => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())))
   const base = `http://127.0.0.1:${server.address().port}`
-  await writeFile(join(directory, 'gondo.env'), `GONDO_API_URL=${base}\nGONDO_ACCOUNT_ID='trial-account'\nGONDO_API_KEY="fake-test-key"\n`, { mode: 0o600 })
+  await writeFile(join(directory, 'gondo.env'), `GONDO_API_URL=${base}\nGONDO_API_KEY="fake-test-key"\n`, { mode: 0o600 })
 
   await t.test('an env file configures an authenticated guide request', async () => {
     const result = await invoke(['--env-file', './gondo.env', 'guide'])
     assert.equal(JSON.parse(result.stdout).ok, true)
+    assert.deepEqual(requests[0], {
+      url: '/api/operator/me', method: 'GET', authorization: 'Bearer fake-test-key', body: undefined,
+    })
     assert.deepEqual(requests.at(-1), {
       url: '/api/accounts/trial-account/operator/guide?topic=overview', method: 'GET',
       authorization: 'Bearer fake-test-key', body: undefined,
@@ -78,7 +83,7 @@ test('the published artifact works without an app checkout', async (t) => {
   })
 
   await t.test('missing configuration and missing env files fail clearly', async () => {
-    await assert.rejects(invoke(['guide']), error => error.code === 1 && /GONDO_API_URL is required/.test(error.stderr))
+    await assert.rejects(invoke(['guide']), error => error.code === 1 && /GONDO_API_KEY is required/.test(error.stderr))
     // Node versions that pre-read --env-file can fail before the CLI starts.
     await assert.rejects(invoke(['--env-file', './absent.env', 'guide']), error => [1, 9].includes(error.code) && /ENOENT|not found/.test(error.stderr))
   })
