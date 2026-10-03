@@ -28,7 +28,7 @@ gondo --env-file /absolute/path/to/gondo.env guide
 
 `--env-file` accepts dotenv syntax, including quoted values. Existing environment variables take precedence over the file. If `GONDO_API_KEY` is already set in your agent's environment, omit the flag. The CLI never loads an env file implicitly. It connects to `https://runtime.gondo.ai` and discovers the account belonging to your key automatically. For development, set `GONDO_API_URL` to another runtime; `GONDO_ACCOUNT_ID` remains an optional override for existing setups. Overrides do not change which account a key can access.
 
-Keep the key out of prompts, source control, and shared logs. Give your agent the local env-file path, not the key text. Required integrations must already be connected or enabled in Gondo; enable Public browsing for public websites.
+Keep the key out of prompts, source control, and shared logs. Give your agent the local env-file path, not the key text. Connect required integrations using the setup commands below or in Gondo; enable Public browsing for public websites.
 
 ## Give this to your agent
 
@@ -100,7 +100,7 @@ gondo integrations test <id>
 gondo integrations enable <id>
 ```
 
-Only prebuilt providers with supplied credentials are supported. Credential JSON/YAML must match the displayed schema; `--file -` reads stdin. Do not pass secret values as arguments. Connections start disabled, and enablement is explicit. Failed checks preserve previous credentials. `checked: false` means no provider check was available. Use `integrations list|get <id>`, `disable <id>`, or `update <id> --file settings.json` (fields: `label`, `maxScope`, `enabledToolsets`, `disabledTools`). Provider metadata lists valid tool names; `maxScope` accepts `read`, `write`, `admin`. These settings govern named tools, not direct API code.
+Only prebuilt providers with supplied credentials are supported. Credential JSON/YAML must match the displayed schema; `--file -` reads stdin. Do not pass secret values as arguments. Connections start disabled, and enablement is explicit. Replacement credentials are validated separately before an atomic switch; failed checks leave live credentials untouched. Concurrent replacements return a conflict rather than overwriting each other. `checked: false` means no provider check was available. Use `integrations list|get <id>`, `disable <id>`, or `update <id> --file settings.json` (fields: `label`, `maxScope`, `enabledToolsets`, `disabledTools`). Provider metadata lists valid tool names; `maxScope` accepts `read`, `write`, `admin`. These settings govern named tools, not direct API code.
 
 ## Webhooks and workflow documents
 

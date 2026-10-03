@@ -371,7 +371,7 @@ export async function buildRequest(argv, { stdin = process.stdin } = {}) {
   if (!request.path)
     throw new Error('Unknown command. Use --help for supported commands.')
 
-  const maxPositionals = command === 'workflows' && action === 'webhook' ? 4 : command === 'attempts' && action === 'files' ? (id === 'download' ? 5 : 4) : ['guide', 'exec'].includes(command) ? 1 : ['list', 'read'].includes(command) ? 2 : 3
+  const maxPositionals = command === 'integrations' && ['providers', 'list', 'create'].includes(action) ? 2 : command === 'workflows' && action === 'webhook' ? 4 : command === 'attempts' && action === 'files' ? (id === 'download' ? 5 : 4) : ['guide', 'exec'].includes(command) ? 1 : ['list', 'read'].includes(command) ? 2 : 3
 
   if (positionals.length > maxPositionals)
     throw new Error('Unexpected positional argument. Use --help for command syntax.')
@@ -395,6 +395,30 @@ export function safeDownloadName(name) {
     throw new Error('Unsafe output filename')
 
   return name.replace(WINDOWS_FILENAME_CHARS, '_')
+}
+
+function credentialStrings(value) {
+  if (typeof value === 'string')
+    return value ? [value] : []
+  if (value && typeof value === 'object')
+    return Object.values(value).flatMap(credentialStrings)
+  return []
+}
+
+function redactString(value, secrets) {
+  for (const secret of secrets)
+    value = value.replaceAll(secret, '[REDACTED]')
+  return value
+}
+
+function redactResponse(value, secrets) {
+  if (typeof value === 'string')
+    return redactString(value, secrets)
+  if (Array.isArray(value))
+    return value.map(item => redactResponse(item, secrets))
+  if (value && typeof value === 'object')
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactResponse(item, secrets)]))
+  return value
 }
 
 export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdout = process.stdout, stderr = process.stderr, stdin = process.stdin } = {}) {
@@ -471,16 +495,11 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
       if (next.binary && response.ok)
         return { response }
 
-      let text = (await response.text()).replaceAll(key, '[REDACTED]')
-      for (const secret of Object.values(request.body?.credentials ?? {})) {
-        if (typeof secret === 'string' && secret)
-          text = text.replaceAll(JSON.stringify(secret).slice(1, -1), '[REDACTED]')
-      }
-
+      const text = await response.text()
       let result
 
       try {
-        result = text ? JSON.parse(text) : null
+        result = text ? redactResponse(JSON.parse(text), [key, ...credentialStrings(request.body?.credentials)]) : null
       }
       catch {
         throw new Error(`Runtime returned non-JSON (HTTP ${response.status}). Check GONDO_API_URL points to the runtime.`)
@@ -509,6 +528,9 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
     }
 
     const download = async (sessionId, file, directory, fetchFile) => {
+      const declaredSize = file.sizeBytes ?? undefined
+      if (declaredSize !== undefined && (!Number.isSafeInteger(declaredSize) || declaredSize < 0))
+        throw new Error('Invalid file size metadata')
       const name = safeDownloadName(file.name)
 
       await mkdir(directory, { recursive: true })
@@ -533,7 +555,7 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
         const check = new Transform({ transform(chunk, _encoding, callback) {
           size += chunk.length
 
-          if (size > (file.sizeBytes ?? 512 * 1024 * 1024))
+          if (size > (declaredSize ?? 512 * 1024 * 1024))
             return callback(new Error('Download exceeded its declared size'))
 
           hash.update(chunk)
@@ -542,7 +564,7 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
 
         await pipeline(Readable.fromWeb(received.response.body), check, handle.createWriteStream())
 
-        if ((file.sizeBytes !== undefined && size !== file.sizeBytes) || (file.sha256 && hash.digest('hex') !== file.sha256))
+        if ((declaredSize !== undefined && size !== declaredSize) || (file.sha256 && hash.digest('hex') !== file.sha256))
           throw new Error('Downloaded file failed integrity verification')
 
         done = true
@@ -690,10 +712,7 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
   catch (error) {
     // Do not dump request objects, environment variables, or authorization headers.
     let message = error instanceof Error ? error.message : 'Command failed'
-    for (const secret of Object.values(request?.body?.credentials ?? {})) {
-      if (typeof secret === 'string' && secret)
-        message = message.replaceAll(secret, '[REDACTED]')
-    }
+    message = redactString(message, credentialStrings(request?.body?.credentials))
     if (request?.secretOutput && secretHandle && !secretWritten)
       message += ' Webhook state may have changed; inspect it before explicitly rotating again. No automatic retry was performed.'
 

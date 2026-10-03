@@ -102,3 +102,58 @@ test('unsafe filenames and existing outputs fail before storage requests', async
     assert.equal(await readFile(join(dir, 'existing.docx'), 'utf8'), 'keep')
   }
 })
+
+for (const secret of ['true', 'null', '"quoted"', '\\escaped']) {
+  test(`redaction preserves parsed JSON types for ${JSON.stringify(secret)}`, async () => {
+    const result = await invoke(['integrations', 'credentials', 'i', '--file', '-'], async () => Response.json({ checked: true, nullable: null, nested: [{ message: `echo ${secret}` }] }), Readable.from([JSON.stringify({ token: secret })]))
+    assert.equal(result.code, 0)
+    const value = JSON.parse(result.stdout)
+    assert.equal(value.checked, true)
+    assert.equal(value.nullable, null)
+    assert.equal(value.nested[0].message, 'echo [REDACTED]')
+  })
+}
+
+test('nested credential strings are redacted in responses and network errors', async () => {
+  for (const failNetwork of [false, true]) {
+    const result = await invoke(['integrations', 'credentials', 'i', '--file', '-'], async () => {
+      if (failNetwork) throw new Error('echo secret-nested')
+      return Response.json({ error: { messages: ['echo secret-nested'] } }, { status: 400 })
+    }, Readable.from(['{"oauth":{"clientSecret":"secret-nested"}}']))
+    assert.equal(result.code, 1)
+    assert.ok(!result.stderr.includes('secret-nested'))
+    assert.match(result.stderr, /REDACTED/)
+  }
+})
+
+for (const args of [['integrations', 'providers', 'typo'], ['integrations', 'list', 'typo'], ['integrations', 'create', 'typo', '--provider', 'clio', '--name', 'Demo']]) {
+  test(`rejects unintended argument: ${args.join(' ')}`, async () => {
+    const result = await invoke(args, () => assert.fail('must not send'))
+    assert.equal(result.code, 1)
+    assert.match(result.stderr, /Unexpected positional/)
+  })
+}
+
+for (const sizeBytes of [undefined, null, -1, '4', 1]) {
+  test(`artifact size ${JSON.stringify(sizeBytes)} is handled consistently`, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'gondo-size-'))
+    const valid = sizeBytes == null
+    const result = await invoke(['attempts', 'files', 'download', 'attempt', 'artifact', '--output-dir', dir], async url => {
+      if (url.hostname === 'storage.test') return new Response('docx')
+      return Response.json(url.pathname.endsWith('download-url') ? { sasUrl: 'https://storage.test/file' } : { fileArtifacts: [{ id: 'artifact', name: 'letter.docx', sizeBytes }] })
+    })
+    assert.equal(result.code, valid ? 0 : 1)
+    if (valid) assert.equal(await readFile(join(dir, 'letter.docx'), 'utf8'), 'docx')
+    else assert.deepEqual(await readdir(dir), [])
+  })
+}
+
+test('webhook failure removes the reserved secret file and never retries', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'gondo-webhook-fail-'))
+  let calls = 0
+  const result = await invoke(['workflows', 'webhook', 'configure', 'wf', '--output', join(dir, 'secret.json')], async () => { calls++; throw new Error('connection lost') })
+  assert.equal(result.code, 1)
+  assert.equal(calls, 1)
+  assert.deepEqual(await readdir(dir), [])
+  assert.match(result.stderr, /state may have changed/)
+})
