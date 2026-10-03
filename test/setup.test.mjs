@@ -1,36 +1,29 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile, readdir, stat, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { test } from 'node:test'
-import { buildRequest, runCli } from '../src/cli.mjs'
+import { buildRequest } from '../src/cli.mjs'
+import { createRunner, directory } from '../test-support/cli.mjs'
 
-async function invoke(args, fetchImpl, stdin) {
-  let stdout = ''; let stderr = ''
-  const code = await runCli(args, { env: { GONDO_API_KEY: 'fake-key', GONDO_ACCOUNT_ID: 'account' }, fetchImpl,
-    stdout: { write: v => { stdout += v } }, stderr: { write: v => { stderr += v } }, stdin })
-  return { code, stdout, stderr }
-}
+const invoke = createRunner({ GONDO_API_KEY: 'fake-key', GONDO_ACCOUNT_ID: 'account' })
 
-test('routes nested setup commands and rejects extra positional arguments', async () => {
+test('routes nested setup commands', async () => {
   assert.equal((await buildRequest(['integrations', 'provider', 'clio'])).path, '/operator/integrations/providers/clio')
   assert.deepEqual((await buildRequest(['integrations', 'create', '--provider', 'clio', '--name', 'Demo'])).body, { providerKey: 'clio', label: 'Demo' })
   assert.equal((await buildRequest(['workflows', 'webhook', 'get', 'wf'])).path, '/workflows/wf/webhook/connection')
   assert.equal((await buildRequest(['attempts', 'files', 'list', 'attempt'])).path, '/run-attempts/attempt')
-  await assert.rejects(buildRequest(['attempts', 'files', 'list', 'attempt', 'extra']), /Unexpected positional/)
-  await assert.rejects(buildRequest(['workflows', 'webhook', 'configure', 'wf']), /--output/)
 })
 
 test('credential stdin works and errors never print supplied secrets', async () => {
   const result = await invoke(['integrations', 'credentials', 'i', '--file', '-', '--variant', 'eu'], async (_url, init) => {
     assert.deepEqual(JSON.parse(init.body), { credentials: { token: 'very-private' }, variantKey: 'eu' })
     return Response.json({ message: 'Rejected very-private' }, { status: 400 })
-  }, Readable.from(['{"token":"very-private"}']))
+  }, { stdin: Readable.from(['{"token":"very-private"}']) })
   assert.equal(result.code, 1)
   assert.ok(!result.stderr.includes('very-private'))
-  const invalid = await invoke(['integrations', 'credentials', 'i', '--file', '-'], () => assert.fail('must not send'), Readable.from(['token: [secret-invalid']))
+  const invalid = await invoke(['integrations', 'credentials', 'i', '--file', '-'], () => assert.fail('must not send'), { stdin: Readable.from(['token: [secret-invalid']) })
   assert.equal(invalid.code, 1)
   assert.ok(!invalid.stderr.includes('secret-invalid'))
 })
@@ -46,8 +39,8 @@ test('missing scope is actionable and mutations are not retried', async () => {
   assert.match(result.stderr, /integrations:manage/)
 })
 
-test('webhook secret is saved privately, never printed, and existing files block requests', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'gondo-secret-'))
+test('webhook secret is saved privately, never printed, and existing files block requests', async t => {
+  const dir = await directory(t)
   const file = join(dir, 'webhook.json')
   let calls = 0
   const send = async () => { calls++; return Response.json({ configured: true, endpointUrl: 'https://example.test/hook', secret: 'hook-private' }) }
@@ -61,16 +54,16 @@ test('webhook secret is saved privately, never printed, and existing files block
   assert.equal(calls, 1)
 })
 
-test('existing webhook configuration does not invent or rotate secrets', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'gondo-secret-'))
+test('existing webhook configuration does not invent or rotate secrets', async t => {
+  const dir = await directory(t)
   const result = await invoke(['workflows', 'webhook', 'configure', 'wf', '--output', join(dir, 'existing.json')], async () => Response.json({ configured: true, secret: null }))
   assert.equal(result.code, 0)
   assert.equal(JSON.parse(result.stdout).secretIssued, false)
 })
 
 for (const corrupt of [false, true]) {
-  test(`artifact download separates authorization and verifies integrity (corrupt=${corrupt})`, async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'gondo-artifact-'))
+  test(`artifact download separates authorization and verifies integrity (corrupt=${corrupt})`, async t => {
+    const dir = await directory(t)
     const bytes = Buffer.from('docx bytes')
     const file = { id: 'artifact', name: 'letter.docx', sizeBytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }
     const result = await invoke(['attempts', 'files', 'download', 'attempt', 'artifact', '--output-dir', dir], async (url, init) => {
@@ -88,9 +81,9 @@ for (const corrupt of [false, true]) {
   })
 }
 
-test('unsafe filenames and existing outputs fail before storage requests', async () => {
+test('unsafe filenames and existing outputs fail before storage requests', async t => {
   for (const name of ['../escape.docx', 'existing.docx']) {
-    const dir = await mkdtemp(join(tmpdir(), 'gondo-artifact-'))
+    const dir = await directory(t)
     await writeFile(join(dir, 'existing.docx'), 'keep')
     let calls = 0
     const result = await invoke(['attempts', 'files', 'download', 'attempt', 'artifact', '--output-dir', dir], async () => {
@@ -105,7 +98,7 @@ test('unsafe filenames and existing outputs fail before storage requests', async
 
 for (const secret of ['true', 'null', '"quoted"', '\\escaped']) {
   test(`redaction preserves parsed JSON types for ${JSON.stringify(secret)}`, async () => {
-    const result = await invoke(['integrations', 'credentials', 'i', '--file', '-'], async () => Response.json({ checked: true, nullable: null, nested: [{ message: `echo ${secret}` }] }), Readable.from([JSON.stringify({ token: secret })]))
+    const result = await invoke(['integrations', 'credentials', 'i', '--file', '-'], async () => Response.json({ checked: true, nullable: null, nested: [{ message: `echo ${secret}` }] }), { stdin: Readable.from([JSON.stringify({ token: secret })]) })
     assert.equal(result.code, 0)
     const value = JSON.parse(result.stdout)
     assert.equal(value.checked, true)
@@ -119,24 +112,16 @@ test('nested credential strings are redacted in responses and network errors', a
     const result = await invoke(['integrations', 'credentials', 'i', '--file', '-'], async () => {
       if (failNetwork) throw new Error('echo secret-nested')
       return Response.json({ error: { messages: ['echo secret-nested'] } }, { status: 400 })
-    }, Readable.from(['{"oauth":{"clientSecret":"secret-nested"}}']))
+    }, { stdin: Readable.from(['{"oauth":{"clientSecret":"secret-nested"}}']) })
     assert.equal(result.code, 1)
     assert.ok(!result.stderr.includes('secret-nested'))
     assert.match(result.stderr, /REDACTED/)
   }
 })
 
-for (const args of [['integrations', 'providers', 'typo'], ['integrations', 'list', 'typo'], ['integrations', 'create', 'typo', '--provider', 'clio', '--name', 'Demo']]) {
-  test(`rejects unintended argument: ${args.join(' ')}`, async () => {
-    const result = await invoke(args, () => assert.fail('must not send'))
-    assert.equal(result.code, 1)
-    assert.match(result.stderr, /Unexpected positional/)
-  })
-}
-
 for (const sizeBytes of [undefined, null, -1, '4', 1]) {
-  test(`artifact size ${JSON.stringify(sizeBytes)} is handled consistently`, async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'gondo-size-'))
+  test(`artifact size ${JSON.stringify(sizeBytes)} is handled consistently`, async t => {
+    const dir = await directory(t)
     const valid = sizeBytes == null
     const result = await invoke(['attempts', 'files', 'download', 'attempt', 'artifact', '--output-dir', dir], async url => {
       if (url.hostname === 'storage.test') return new Response('docx')
@@ -148,8 +133,8 @@ for (const sizeBytes of [undefined, null, -1, '4', 1]) {
   })
 }
 
-test('webhook failure removes the reserved secret file and never retries', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'gondo-webhook-fail-'))
+test('webhook failure removes the reserved secret file and never retries', async t => {
+  const dir = await directory(t)
   let calls = 0
   const result = await invoke(['workflows', 'webhook', 'configure', 'wf', '--output', join(dir, 'secret.json')], async () => { calls++; throw new Error('connection lost') })
   assert.equal(result.code, 1)

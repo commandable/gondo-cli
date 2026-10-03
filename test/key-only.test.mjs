@@ -1,18 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { runCli } from '../src/cli.mjs'
+import { createRunner } from '../test-support/cli.mjs'
 
-async function invoke(args, fetchImpl, overrides = {}) {
-  let stdout = ''
-  let stderr = ''
-  const code = await runCli(args, {
-    env: { GONDO_API_KEY: 'fake-key', ...overrides },
-    fetchImpl,
-    stdout: { write: value => { stdout += value } },
-    stderr: { write: value => { stderr += value } },
-  })
-  return { code, stdout, stderr }
-}
+const invoke = createRunner({ GONDO_API_KEY: 'fake-key' })
 
 test('a key alone discovers its account on the production runtime', async () => {
   const calls = []
@@ -33,7 +23,7 @@ test('an explicit runtime is also used for account discovery', async () => {
   const result = await invoke(['employees', 'list'], async (url) => {
     urls.push(String(url))
     return Response.json(urls.length === 1 ? { accountId: 'local-account' } : [])
-  }, { GONDO_API_URL: 'http://localhost:3001' })
+  }, { env: { GONDO_API_URL: 'http://localhost:3001' } })
   assert.equal(result.code, 0)
   assert.deepEqual(urls, ['http://localhost:3001/api/operator/me', 'http://localhost:3001/api/accounts/local-account/employees'])
 })
@@ -66,7 +56,7 @@ test('an existing account override skips discovery', async () => {
   const result = await invoke(['guide'], async (url) => {
     urls.push(String(url))
     return Response.json({ guide: 'Existing configuration.' })
-  }, { GONDO_ACCOUNT_ID: 'existing-account' })
+  }, { env: { GONDO_ACCOUNT_ID: 'existing-account' } })
   assert.equal(result.code, 0)
   assert.deepEqual(urls, ['https://runtime.gondo.ai/api/accounts/existing-account/operator/guide?topic=overview'])
 })

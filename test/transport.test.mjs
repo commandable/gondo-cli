@@ -1,41 +1,46 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readFile, stat, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { buildRequest, runCli, safeDownloadName } from '../src/cli.mjs'
+import { buildRequest, safeDownloadName } from '../src/cli.mjs'
+import { createRunner, directory } from '../test-support/cli.mjs'
 
 const env = { GONDO_API_URL: 'https://runtime.test', GONDO_ACCOUNT_ID: 'account', GONDO_API_KEY: 'fake-secret' }
-async function invoke(args, fetchImpl, overrides = {}) {
-  let stdout = ''; let stderr = ''
-  const code = await runCli(args, { env: { ...env, ...overrides }, fetchImpl, stdout: { write: v => { stdout += v } }, stderr: { write: v => { stderr += v } } })
-  return { code, stdout, stderr }
-}
-async function directory(t) {
-  const dir = await mkdtemp(join(tmpdir(), 'gondo-transport-'))
-  t.after(() => rm(dir, { recursive: true, force: true }))
-  return dir
-}
+const invoke = createRunner(env)
 
-for (const args of [['bogus'], ['guide', 'unexpected'], ['employees', 'get'], ['employees', 'get', '../other'], ['exec'], ['workflows', 'create', '--employee', 'emp'], ['guide', '--unknown']]) {
+const invalidArguments = [
+  [['bogus']], [['guide', 'unexpected']], [['employees', 'get']],
+  [['employees', 'get', '../other']], [['exec']],
+  [['workflows', 'create', '--employee', 'emp']], [['guide', '--unknown']],
+  [['integrations', 'providers', 'typo'], /Unexpected positional/],
+  [['integrations', 'list', 'typo'], /Unexpected positional/],
+  [['integrations', 'create', 'typo', '--provider', 'clio', '--name', 'Demo'], /Unexpected positional/],
+  [['attempts', 'files', 'list', 'attempt', 'extra'], /Unexpected positional/],
+  [['workflows', 'webhook', 'configure', 'wf'], /--output/],
+]
+for (const [args, message] of invalidArguments) {
   test(`invalid arguments fail before transport: ${args}`, async () => {
-    assert.equal((await invoke(args, () => assert.fail('must not send'))).code, 1)
+    let calls = 0
+    const result = await invoke(args, () => { calls++; assert.fail('must not send') })
+    assert.equal(calls, 0)
+    assert.equal(result.code, 1)
+    if (message) assert.match(result.stderr, message)
   })
 }
 for (const url of ['http://runtime.test', 'https://user:pass@runtime.test', 'https://runtime.test?secret=1', 'https://runtime.test#fragment']) {
   test(`unsafe runtime URL fails before transport: ${url}`, async () => {
-    assert.equal((await invoke(['guide'], () => assert.fail('must not send'), { GONDO_API_URL: url })).code, 1)
+    assert.equal((await invoke(['guide'], () => assert.fail('must not send'), { env: { GONDO_API_URL: url } })).code, 1)
   })
 }
 for (const account of ['../other', 'a/b', '.', '..']) {
   test(`unsafe account path fails before transport: ${account}`, async () => {
-    assert.equal((await invoke(['guide'], () => assert.fail('must not send'), { GONDO_ACCOUNT_ID: account })).code, 1)
+    assert.equal((await invoke(['guide'], () => assert.fail('must not send'), { env: { GONDO_ACCOUNT_ID: account } })).code, 1)
   })
 }
 for (const url of ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://[::1]:3000']) {
   test(`supports loopback runtime: ${url}`, async () => {
-    assert.equal((await invoke(['guide'], async () => Response.json({ guide: 'ok' }), { GONDO_API_URL: url })).code, 0)
+    assert.equal((await invoke(['guide'], async () => Response.json({ guide: 'ok' }), { env: { GONDO_API_URL: url } })).code, 0)
   })
 }
 for (const [status, body] of [[503, { message: 'Unavailable' }], [200, { success: false }], [200, { ok: false }]]) {
