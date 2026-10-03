@@ -406,7 +406,7 @@ function credentialStrings(value) {
 }
 
 function redactString(value, secrets) {
-  for (const secret of secrets)
+  for (const secret of [...secrets].sort((a, b) => b.length - a.length))
     value = value.replaceAll(secret, '[REDACTED]')
   return value
 }
@@ -417,7 +417,7 @@ function redactResponse(value, secrets) {
   if (Array.isArray(value))
     return value.map(item => redactResponse(item, secrets))
   if (value && typeof value === 'object')
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactResponse(item, secrets)]))
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [redactString(key, secrets), redactResponse(item, secrets)]))
   return value
 }
 
@@ -712,13 +712,12 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
   catch (error) {
     // Do not dump request objects, environment variables, or authorization headers.
     let message = error instanceof Error ? error.message : 'Command failed'
-    message = redactString(message, credentialStrings(request?.body?.credentials))
+    const key = env.GONDO_API_KEY
+    message = redactString(message, [...(key ? [key] : []), ...credentialStrings(request?.body?.credentials)])
     if (request?.secretOutput && secretHandle && !secretWritten)
       message += ' Webhook state may have changed; inspect it before explicitly rotating again. No automatic retry was performed.'
 
-    const key = env.GONDO_API_KEY
-
-    stderr.write(`${JSON.stringify({ error: key ? message.replaceAll(key, '[REDACTED]') : message, ...(request?.path === '/code/execute' ? { sessionId: request.body?.sessionId, ...recovery, recovery: 'Inspect the session and execution before continuing; do not repeat this execution automatically.' } : {}) })}\n`)
+    stderr.write(`${JSON.stringify({ error: message, ...(request?.path === '/code/execute' ? { sessionId: request.body?.sessionId, ...recovery, recovery: 'Inspect the session and execution before continuing; do not repeat this execution automatically.' } : {}) })}\n`)
 
     return 1
   }

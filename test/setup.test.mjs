@@ -98,23 +98,24 @@ test('unsafe filenames and existing outputs fail before storage requests', async
 
 for (const secret of ['true', 'null', '"quoted"', '\\escaped']) {
   test(`redaction preserves parsed JSON types for ${JSON.stringify(secret)}`, async () => {
-    const result = await invoke(['integrations', 'credentials', 'i', '--file', '-'], async () => Response.json({ checked: true, nullable: null, nested: [{ message: `echo ${secret}` }] }), { stdin: Readable.from([JSON.stringify({ token: secret })]) })
+    const result = await invoke(['integrations', 'credentials', 'i', '--file', '-'], async () => Response.json({ checked: true, emptyValue: null, nested: [{ message: `echo ${secret}`, [secret]: 'hidden key' }] }), { stdin: Readable.from([JSON.stringify({ token: secret })]) })
     assert.equal(result.code, 0)
     const value = JSON.parse(result.stdout)
     assert.equal(value.checked, true)
-    assert.equal(value.nullable, null)
-    assert.equal(value.nested[0].message, 'echo [REDACTED]')
+    assert.equal(value.emptyValue, null)
+    assert.deepEqual(value.nested[0], { message: 'echo [REDACTED]', '[REDACTED]': 'hidden key' })
   })
 }
 
-test('nested credential strings are redacted in responses and network errors', async () => {
+test('nested and overlapping credentials are redacted in response keys, values and network errors', async () => {
   for (const failNetwork of [false, true]) {
     const result = await invoke(['integrations', 'credentials', 'i', '--file', '-'], async () => {
       if (failNetwork) throw new Error('echo secret-nested')
-      return Response.json({ error: { messages: ['echo secret-nested'] } }, { status: 400 })
-    }, { stdin: Readable.from(['{"oauth":{"clientSecret":"secret-nested"}}']) })
+      return Response.json({ error: { 'secret-nested': ['echo secret-nested'] } }, { status: 400 })
+    }, { stdin: Readable.from(['{"token":"secret","oauth":{"clientSecret":"secret-nested"}}']) })
     assert.equal(result.code, 1)
-    assert.ok(!result.stderr.includes('secret-nested'))
+    assert.ok(!result.stderr.includes('secret'))
+    assert.ok(!result.stderr.includes('-nested'))
     assert.match(result.stderr, /REDACTED/)
   }
 })
