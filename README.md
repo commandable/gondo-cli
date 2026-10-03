@@ -86,3 +86,33 @@ npx --yes gondo@0.1.0 --env-file /absolute/path/to/gondo.env guide
 ```
 
 `0.1.0` is prepared for its first publication; it is not published by creating or pushing this repository. The npm name was unregistered when checked, but the registry makes the final availability decision at publish time. Future releases need a new version number. The package is public with no open-source license grant (`UNLICENSED`).
+
+## Connection setup and API-key scopes
+
+All keys have `operator` access. In Account → API keys, admins can additionally select **Manage integrations** (`integrations:manage`) when creating a key. Existing keys do not gain this permission automatically; create a replacement and revoke the old key to change permissions. Ordinary keys can already use connected APIs, including writes; this additional scope controls connection setup, not provider API permissions. Keys cannot grant scopes or approve human reviews.
+
+```sh
+gondo integrations providers
+gondo integrations provider clio
+gondo integrations create --provider clio --name "Demo Clio"
+gondo integrations credentials <id> --file ./private-credentials.json --variant <variant>
+gondo integrations test <id>
+gondo integrations enable <id>
+```
+
+Only prebuilt providers with supplied credentials are supported. Credential JSON/YAML must match the displayed schema; `--file -` reads stdin. Do not pass secret values as arguments. Connections start disabled, and enablement is explicit. Failed checks preserve previous credentials. `checked: false` means no provider check was available. Use `integrations list|get <id>`, `disable <id>`, or `update <id> --file settings.json` (fields: `label`, `maxScope`, `enabledToolsets`, `disabledTools`). Provider metadata lists valid tool names; `maxScope` accepts `read`, `write`, `admin`. These settings govern named tools, not direct API code.
+
+## Webhooks and workflow documents
+
+```sh
+gondo workflows webhook get <workflow-id>
+gondo workflows webhook configure <workflow-id> --output ./private-webhook.json
+gondo attempts files list <attempt-id>
+gondo attempts files download <attempt-id> <artifact-id> --output-dir ./outputs
+```
+
+Webhook configuration requires a new private output file and never prints its secret. Repeating `configure` preserves existing credentials; explicitly use `rotate-secret` with another output file to replace a lost secret. Trigger the returned URL with curl using its `headerName` and `secret`, then inspect runs. No mutations are automatically retried.
+
+Workflow downloads target an attempt, not a CLI workspace session. Downloads refuse unsafe filenames or overwrites, remove partial files, verify available size/checksum metadata and cap files without size metadata at 512 MiB. Storage requests never carry the Gondo API key.
+
+Deploy the backend API-key scope migration and matching runtime before releasing this CLI. No SharePoint file-transfer changes are part of this release.

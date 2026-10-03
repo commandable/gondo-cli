@@ -35,6 +35,18 @@ gondo files list <session-id>|upload <session-id> --file <path>
 gondo files download <file-id> --session <id> --output-dir <dir>
 gondo executions get <execution-id> --session <id>
 gondo browser restart <session-id> --integration <ref>
+gondo integrations providers|provider <provider>|list|get <id>
+gondo integrations create --provider <provider> --name <name> [--reference <ref>]
+gondo integrations credentials <id> --file credentials.json|- [--variant <variant>]
+gondo integrations test|enable|disable <id>
+gondo integrations update <id> --file settings.json
+gondo workflows webhook get|configure|rotate-secret <workflow-id> [--output <private-file>]
+gondo attempts files list <attempt-id>
+gondo attempts files download <attempt-id> <artifact-id> --output-dir <dir>
+
+Keys have operator access; integration changes also require integrations:manage.
+New integrations are disabled. Save credentials, inspect the check result, then enable explicitly.
+Webhook configure/rotate-secret require --output; secrets never appear on stdout. Configure never rotates an existing secret.
 
 Requires Pro, including active Pro trials. Responses are JSON. Exit 0: success; 1: failure; 2: user action required.
 Workspaces retain files for 24h inactivity. Browsers expire after 10m idle / 30m total.
@@ -51,6 +63,9 @@ const options = {
   'attach': { type: 'string', multiple: true },
   'output-dir': { type: 'string' },
   'integration': { type: 'string' },
+  'provider': { type: 'string' },
+  'reference': { type: 'string' },
+  'variant': { type: 'string' },
   'input': { type: 'string' },
   'output': { type: 'string' },
   'employee': { type: 'string' },
@@ -78,8 +93,18 @@ function segment(value, label = 'ID') {
   return encodeURIComponent(result)
 }
 
-async function readStructured(file) {
-  const source = await readFile(required(file, '--file or --input'), 'utf8')
+async function readStructured(file, stdin = process.stdin) {
+  required(file, '--file or --input')
+  let source
+  if (file === '-') {
+    const chunks = []
+    for await (const chunk of stdin)
+      chunks.push(Buffer.from(chunk))
+    source = Buffer.concat(chunks).toString('utf8')
+  }
+  else {
+    source = await readFile(file, 'utf8')
+  }
 
   if (file.toLowerCase().endsWith('.json'))
     return JSON.parse(source)
@@ -102,7 +127,7 @@ async function definitionBody(file) {
   return { definitionYaml: await readFile(file, 'utf8') }
 }
 
-export async function buildRequest(argv) {
+export async function buildRequest(argv, { stdin = process.stdin } = {}) {
   const { values, positionals } = parseArgs({ args: argv, options, allowPositionals: true, strict: true })
 
   if (values.version)
@@ -199,6 +224,61 @@ export async function buildRequest(argv) {
         request.body = await readStructured(values.file)
     }
   }
+  else if (command === 'integrations') {
+    const base = '/operator/integrations'
+    if (action === 'providers')
+      request.path = `${base}/providers`
+    else if (action === 'provider')
+      request.path = `${base}/providers/${segment(id)}`
+    else if (action === 'list')
+      request.path = base
+    else if (action === 'create') {
+      request.path = base
+      request.method = 'POST'
+      request.body = { providerKey: required(values.provider, '--provider'), label: required(values.name, '--name'), ...(values.reference ? { referenceId: values.reference } : {}) }
+    }
+    else if (action === 'get')
+      request.path = `${base}/${segment(id)}`
+    else if (action === 'update') {
+      request.path = `${base}/${segment(id)}`
+      request.method = 'PATCH'
+      request.body = await readStructured(values.file)
+    }
+    else if (['credentials', 'test', 'enable', 'disable'].includes(action)) {
+      request.path = `${base}/${segment(id)}/${action}`
+      request.method = 'POST'
+      if (action === 'credentials') {
+        required(values.file, '--file')
+        try {
+          request.body = { credentials: await readStructured(values.file, stdin), ...(values.variant ? { variantKey: values.variant } : {}) }
+        }
+        catch {
+          throw new Error('Could not read credentials. Provide a valid JSON or YAML object using --file (or --file - for stdin).')
+        }
+      }
+    }
+  }
+  else if (command === 'workflows' && action === 'webhook') {
+    const routes = { get: ['GET', 'connection'], configure: ['POST', 'connection'], 'rotate-secret': ['POST', 'rotate'] }
+    const route = routes[id]
+    if (route) {
+      request.path = `/workflows/${segment(positionals[3], 'workflow ID')}/webhook/${route[1]}`
+      request.method = route[0]
+      if (route[0] === 'POST') {
+        request.secretOutput = required(values.output, '--output')
+        request.output = undefined
+      }
+    }
+  }
+  else if (command === 'attempts' && action === 'files') {
+    if (id === 'list' || id === 'download') {
+      const attemptId = segment(positionals[3], 'attempt ID')
+      request.path = `/run-attempts/${attemptId}`
+      request.artifactList = true
+      if (id === 'download')
+        request.artifactDownload = { attemptId, artifactId: required(positionals[4], 'artifact ID'), directory: required(values['output-dir'], '--output-dir') }
+    }
+  }
   else if (command === 'workflows') {
     if (action === 'list') {
       request.path = '/workflows'
@@ -291,7 +371,7 @@ export async function buildRequest(argv) {
   if (!request.path)
     throw new Error('Unknown command. Use --help for supported commands.')
 
-  const maxPositionals = ['guide', 'exec'].includes(command) ? 1 : ['list', 'read'].includes(command) ? 2 : 3
+  const maxPositionals = command === 'workflows' && action === 'webhook' ? 4 : command === 'attempts' && action === 'files' ? (id === 'download' ? 5 : 4) : ['guide', 'exec'].includes(command) ? 1 : ['list', 'read'].includes(command) ? 2 : 3
 
   if (positionals.length > maxPositionals)
     throw new Error('Unexpected positional argument. Use --help for command syntax.')
@@ -317,11 +397,13 @@ export function safeDownloadName(name) {
   return name.replace(WINDOWS_FILENAME_CHARS, '_')
 }
 
-export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdout = process.stdout, stderr = process.stderr } = {}) {
+export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdout = process.stdout, stderr = process.stderr, stdin = process.stdin } = {}) {
   let recovery
   let request
+  let secretHandle
+  let secretWritten = false
   try {
-    request = await buildRequest(argv)
+    request = await buildRequest(argv, { stdin })
 
     if (request.version) {
       stdout.write(`${packageJson.version}\n`)
@@ -389,7 +471,11 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
       if (next.binary && response.ok)
         return { response }
 
-      const text = (await response.text()).replaceAll(key, '[REDACTED]')
+      let text = (await response.text()).replaceAll(key, '[REDACTED]')
+      for (const secret of Object.values(request.body?.credentials ?? {})) {
+        if (typeof secret === 'string' && secret)
+          text = text.replaceAll(JSON.stringify(secret).slice(1, -1), '[REDACTED]')
+      }
 
       let result
 
@@ -412,6 +498,9 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
       return true
     }
 
+    if (request.secretOutput)
+      secretHandle = await open(request.secretOutput, 'wx', 0o600)
+
     if (!account) {
       const identity = await send({ path: '/api/operator/me', method: 'GET' }, { accountScoped: false })
       if (failed(identity))
@@ -419,7 +508,7 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
       account = segment(identity.result?.accountId, 'API key account ID')
     }
 
-    const download = async (sessionId, file, directory) => {
+    const download = async (sessionId, file, directory, fetchFile) => {
       const name = safeDownloadName(file.name)
 
       await mkdir(directory, { recursive: true })
@@ -432,7 +521,7 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
       let done = false
 
       try {
-        const received = await send({ path: `/code/sessions/${segment(sessionId)}/files/${segment(file.id)}`, method: 'GET', binary: true })
+        const received = fetchFile ? await fetchFile() : await send({ path: `/code/sessions/${segment(sessionId)}/files/${segment(file.id)}`, method: 'GET', binary: true })
 
         if (!received.response.ok)
           throw new Error(`File download failed (HTTP ${received.response.status})`)
@@ -444,7 +533,7 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
         const check = new Transform({ transform(chunk, _encoding, callback) {
           size += chunk.length
 
-          if (size > file.sizeBytes)
+          if (size > (file.sizeBytes ?? 512 * 1024 * 1024))
             return callback(new Error('Download exceeded its declared size'))
 
           hash.update(chunk)
@@ -453,7 +542,7 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
 
         await pipeline(Readable.fromWeb(received.response.body), check, handle.createWriteStream())
 
-        if (size !== file.sizeBytes || (file.sha256 && hash.digest('hex') !== file.sha256))
+        if ((file.sizeBytes !== undefined && size !== file.sizeBytes) || (file.sha256 && hash.digest('hex') !== file.sha256))
           throw new Error('Downloaded file failed integrity verification')
 
         done = true
@@ -547,6 +636,42 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
         return 1
     }
 
+    if (request.secretOutput) {
+      await secretHandle.writeFile(`${JSON.stringify(received.result, null, 2)}\n`, 'utf8')
+      await secretHandle.sync()
+      secretWritten = true
+      stdout.write(`${JSON.stringify({ savedTo: resolve(request.secretOutput), configured: received.result?.configured, secretIssued: Boolean(received.result?.secret) })}\n`)
+      return 0
+    }
+
+    if (request.artifactList) {
+      const files = received.result?.fileArtifacts ?? []
+      if (request.artifactDownload) {
+        const d = request.artifactDownload
+        const file = files.find(item => item.id === d.artifactId)
+        if (!file)
+          throw new Error('File not found in this attempt')
+        const saved = await download(null, file, d.directory, async () => {
+          const signed = await send({ path: `/run-attempts/${d.attemptId}/files/${segment(d.artifactId)}/download-url`, method: 'GET' })
+          if (failed(signed))
+            throw new Error('Could not obtain file download URL')
+          const url = new URL(signed.result?.sasUrl)
+          if (url.protocol !== 'https:' || url.username || url.password || url.hash)
+            throw new Error('Invalid storage download URL')
+          // Storage is a different origin. Never forward the Gondo Authorization header.
+          try {
+            return { response: await fetchImpl(url, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(120000) }) }
+          }
+          catch {
+            throw new Error('Storage download failed. Retry the download to obtain a fresh URL.')
+          }
+        })
+        stdout.write(`${JSON.stringify(saved)}\n`)
+        return 0
+      }
+      received.result = { files: files.map(({ id, name, mime, sizeBytes, sha256 }) => ({ id, name, mime, sizeBytes, sha256 })) }
+    }
+
     const { result } = received
 
     if (request.output) {
@@ -564,12 +689,25 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
   }
   catch (error) {
     // Do not dump request objects, environment variables, or authorization headers.
-    const message = error instanceof Error ? error.message : 'Command failed'
+    let message = error instanceof Error ? error.message : 'Command failed'
+    for (const secret of Object.values(request?.body?.credentials ?? {})) {
+      if (typeof secret === 'string' && secret)
+        message = message.replaceAll(secret, '[REDACTED]')
+    }
+    if (request?.secretOutput && secretHandle && !secretWritten)
+      message += ' Webhook state may have changed; inspect it before explicitly rotating again. No automatic retry was performed.'
 
     const key = env.GONDO_API_KEY
 
     stderr.write(`${JSON.stringify({ error: key ? message.replaceAll(key, '[REDACTED]') : message, ...(request?.path === '/code/execute' ? { sessionId: request.body?.sessionId, ...recovery, recovery: 'Inspect the session and execution before continuing; do not repeat this execution automatically.' } : {}) })}\n`)
 
     return 1
+  }
+  finally {
+    if (secretHandle) {
+      await secretHandle.close()
+      if (!secretWritten)
+        await unlink(request.secretOutput).catch(() => {})
+    }
   }
 }
