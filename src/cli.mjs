@@ -6,7 +6,7 @@ import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { parseArgs, parseEnv } from 'node:util'
 import packageJson from '../package.json' with { type: 'json' }
-import { parseDocument } from 'yaml'
+import { parseDocument, stringify } from 'yaml'
 
 export const HELP = `Gondo account operator CLI
 
@@ -16,11 +16,14 @@ Load a local env file with: gondo --env-file ./gondo.env guide
 Use gondo --version to show the installed CLI version.
 Account admins create keys in Account Settings. Never put a key in source code.
 
-gondo guide [--topic overview|workflows|nodes]
+gondo guide [--topic overview|workflows]
+gondo tools list|describe <existing-admin-tool-name>
+gondo call <existing-admin-tool-name> --file arguments.json [--session <id>] [--output-dir <dir>]
+Tool names, descriptions and argument schemas come from the server. Host and interactive tools return required actions.
 gondo list [namespace-path] [--limit 25]
 gondo read <namespace-path>
 gondo employees list|get <id>|create --file employee.yaml|update <id> --file changes.json|delete <id>
-gondo workflows list|get <id>|create --employee <id> --name <name>
+gondo workflows list|get <id> [--source active|draft|published] [--format json|yaml] [--editor-state]|create --employee <id> --name <name>
 gondo workflows save-draft <id> --file workflow.yaml
 gondo workflows validate <id> [--file workflow.yaml] [--source draft|published]
 gondo workflows export <id> [--source active|draft|published] [--output workflow.yaml]
@@ -29,7 +32,7 @@ gondo workflows rename <id> --name <name>
 gondo runs list|get|attempts|events|definition|cancel <run-id>
 gondo attempts get|events|definition|cancel <attempt-id>
 gondo runs test|start <workflow-id> [--input input.json]
-gondo exec --file investigate.js --integrations ref_one,ref_two [--session <id>] [--attach <path> ...] [--output-dir <dir>]
+gondo exec --file investigate.js --integrations ref_one,ref_two [--channels ref_one,ref_two] [--session <id>] [--attach <path> ...] [--output-dir <dir>]
 gondo sessions create|list|get <id>|close <id>
 gondo files list <session-id>|upload <session-id> --file <path>
 gondo files download <file-id> --session <id> --output-dir <dir>
@@ -45,7 +48,7 @@ gondo attempts files list <attempt-id>
 gondo attempts files download <attempt-id> <artifact-id> --output-dir <dir>
 
 Keys have operator access; integration changes also require integrations:manage.
-New integrations are disabled. Save credentials, inspect the check result, then enable explicitly.
+New integrations follow Admin defaults (enabled). Saving credentials never re-enables an existing connection.
 Webhook configure/rotate-secret require --output; secrets never appear on stdout. Configure never rotates an existing secret.
 
 Requires Pro, including active Pro trials. Responses are JSON. Exit 0: success; 1: failure; 2: user action required.
@@ -72,6 +75,9 @@ const options = {
   'name': { type: 'string' },
   'integrations': { type: 'string' },
   'source': { type: 'string' },
+  'format': { type: 'string' },
+  'editor-state': { type: 'boolean' },
+  'channels': { type: 'string' },
   'topic': { type: 'string' },
   'limit': { type: 'string' },
   'help': { type: 'boolean', short: 'h' },
@@ -140,18 +146,37 @@ export async function buildRequest(argv, { stdin = process.stdin } = {}) {
 
   const request = { method: 'GET', path: '', query: {}, body: undefined, output: values.output, ...(values['env-file'] ? { envFile: values['env-file'] } : {}) }
 
+  // Convenience commands are argument adapters to the shared Admin operations.
+  const call = (name, args, presentation) => {
+    request.path = `/operator/tools/${name}/call`
+    request.method = 'POST'
+    request.query = {}
+    request.body = { arguments: args, ...(values.session ? { sessionId: values.session } : {}), ...(presentation ? { presentation } : {}) }
+    request.requiresCapabilities = 2
+  }
+
   if (command === 'guide') {
     request.path = '/operator/guide'
 
     request.query.topic = values.topic ?? 'overview'
+    request.requiresCapabilities = 2
+  }
+  else if (command === 'tools') {
+    if (action === 'list')
+      request.path = '/operator/tools'
+    else if (action === 'describe')
+      request.path = `/operator/tools/${segment(id, 'tool name')}`
+    request.requiresCapabilities = 2
+  }
+  else if (command === 'call') {
+    call(segment(action, 'tool name'), await readStructured(values.file, stdin))
+    request.outputDir = values['output-dir']
   }
   else if (command === 'list' || command === 'read') {
-    request.path = '/operator/resources'
-
-    request.query = { action: command, path: command === 'read' ? required(action, 'namespace path') : action ?? '/' }
-
-    if (values.limit)
-      request.query.limit = values.limit
+    call(command === 'list' ? 'gondo_list' : 'gondo_read', {
+      path: command === 'read' ? required(action, 'namespace path') : action ?? '/',
+      ...(command === 'list' && values.limit ? { limit: Number(values.limit) } : {}),
+    })
   }
   else if (command === 'exec') {
     request.path = '/code/execute'
@@ -160,6 +185,7 @@ export async function buildRequest(argv, { stdin = process.stdin } = {}) {
 
     request.body = {
       code: await readFile(required(values.file, '--file'), 'utf8'),
+      channels: values.channels?.split(',').map(ref => ref.trim()).filter(Boolean) ?? [],
       integrations: values.integrations?.split(',').map(ref => ref.trim()).filter(Boolean) ?? [],
       ...(values.session ? { sessionId: values.session } : {}),
     }
@@ -205,23 +231,19 @@ export async function buildRequest(argv, { stdin = process.stdin } = {}) {
     request.body = { integration: required(values.integration, '--integration') }
   }
   else if (command === 'employees') {
-    if (action === 'list') {
+    if (action === 'list')
       request.path = '/employees'
-    }
-    else if (action === 'create') {
-      request.path = '/employees'
-
-      request.method = 'POST'
-
-      request.body = await readStructured(values.file)
-    }
-    else if (['get', 'update', 'delete'].includes(action)) {
+    else if (action === 'get')
       request.path = `/employees/${segment(id)}`
-
-      request.method = { get: 'GET', update: 'PATCH', delete: 'DELETE' }[action]
-
-      if (action === 'update')
-        request.body = await readStructured(values.file)
+    else if (['create', 'update', 'delete'].includes(action)) {
+      const body = action === 'delete' ? {} : await readStructured(values.file)
+      const { allowedIntegrationRefs, allowedChannelRefs, ...rest } = body
+      call(`${action}_employee`, {
+        ...rest,
+        ...(action !== 'create' ? { employee_id: required(id, 'employee ID') } : {}),
+        ...(allowedIntegrationRefs !== undefined ? { allowed_integration_refs: allowedIntegrationRefs ?? [] } : {}),
+        ...(allowedChannelRefs !== undefined ? { allowed_channel_refs: allowedChannelRefs ?? [] } : {}),
+      })
     }
   }
   else if (command === 'integrations') {
@@ -233,10 +255,13 @@ export async function buildRequest(argv, { stdin = process.stdin } = {}) {
     else if (action === 'list')
       request.path = base
     else if (action === 'create') {
-      request.path = base
-      request.method = 'POST'
-      request.body = { providerKey: required(values.provider, '--provider'), label: required(values.name, '--name'), ...(values.reference ? { referenceId: values.reference } : {}) }
+      call('gondo_add_prebuilt_api_integration', {
+        type: required(values.provider, '--provider'), label: required(values.name, '--name'),
+        ...(values.reference ? { reference_id: values.reference } : {}),
+      })
     }
+    else if (action === 'enable' || action === 'disable')
+      call('gondo_set_integration_enabled', { integration_id: required(id, 'integration ID'), enabled: action === 'enable' })
     else if (action === 'get')
       request.path = `${base}/${segment(id)}`
     else if (action === 'update') {
@@ -244,7 +269,7 @@ export async function buildRequest(argv, { stdin = process.stdin } = {}) {
       request.method = 'PATCH'
       request.body = await readStructured(values.file)
     }
-    else if (['credentials', 'test', 'enable', 'disable'].includes(action)) {
+    else if (['credentials', 'test'].includes(action)) {
       request.path = `${base}/${segment(id)}/${action}`
       request.method = 'POST'
       if (action === 'credentials') {
@@ -280,56 +305,44 @@ export async function buildRequest(argv, { stdin = process.stdin } = {}) {
     }
   }
   else if (command === 'workflows') {
-    if (action === 'list') {
+    if (action === 'list')
       request.path = '/workflows'
-    }
-    else if (action === 'create') {
-      request.path = '/workflows'
-
-      request.method = 'POST'
-
-      request.body = { employeeId: required(values.employee, '--employee'), name: required(values.name, '--name') }
-    }
+    else if (action === 'create')
+      call('create_new_workflow', { employee_id: required(values.employee, '--employee'), suggested_name: required(values.name, '--name') })
     else {
       const base = `/workflows/${segment(id)}`
-
-      const routes = {
-        'get': ['GET', '/editor'],
-        'save-draft': ['PUT', '/draft'],
-        'discard-draft': ['DELETE', '/draft'],
-        'validate': ['POST', '/validate'],
-        'export': ['POST', '/yaml'],
-        'publish': ['POST', '/publish'],
-        'enable': ['PATCH', ''],
-        'disable': ['PATCH', ''],
-        'rename': ['PATCH', ''],
-        'delete': ['DELETE', ''],
+      if (action === 'get')
+        call('gondo_read', { path: base }, { source: values.source ?? 'active', format: values.format ?? 'json', editorState: values['editor-state'] ?? false })
+      else if (action === 'save-draft') {
+        const body = await definitionBody(values.file)
+        call('gondo_put_workflow', { op: 'replace', workflow_id: id, definition_yaml: body.definitionYaml ?? stringify(body.definition) })
       }
-
-      const route = routes[action]
-
-      if (route) {
-        request.method = route[0]
-
-        request.path = `${base}${route[1]}`
-
-        if (action === 'save-draft')
-          request.body = await definitionBody(values.file)
-
-        if (action === 'validate')
-          request.body = { source: values.source ?? 'draft', ...(values.file ? await definitionBody(values.file) : {}) }
-
-        if (action === 'export')
-          request.body = { source: values.source ?? 'active' }
-
-        if (action === 'publish')
-          request.body = {}
-
-        if (action === 'enable' || action === 'disable')
-          request.body = { enabled: action === 'enable' }
-
-        if (action === 'rename')
-          request.body = { name: required(values.name, '--name') }
+      else if (action === 'publish')
+        call('gondo_publish_workflow', { workflow_id: id })
+      else if (action === 'rename')
+        call('gondo_update_workflow_settings', { workflow_id: id, name: required(values.name, '--name') })
+      else if (action === 'validate' && !values.file && !values.source)
+        call('gondo_validate_workflow', { workflow_id: id })
+      else {
+        const routes = {
+          'discard-draft': ['DELETE', '/draft'],
+          'validate': ['POST', '/validate'],
+          'export': ['POST', '/yaml'],
+          'enable': ['PATCH', ''],
+          'disable': ['PATCH', ''],
+          'delete': ['DELETE', ''],
+        }
+        const route = routes[action]
+        if (route) {
+          request.method = route[0]
+          request.path = `${base}${route[1]}`
+          if (action === 'validate')
+            request.body = { source: values.source ?? 'draft', ...(values.file ? await definitionBody(values.file) : {}) }
+          if (action === 'export')
+            request.body = { source: values.source ?? 'active' }
+          if (action === 'enable' || action === 'disable')
+            request.body = { enabled: action === 'enable' }
+        }
       }
     }
   }
@@ -371,7 +384,7 @@ export async function buildRequest(argv, { stdin = process.stdin } = {}) {
   if (!request.path)
     throw new Error('Unknown command. Use --help for supported commands.')
 
-  const maxPositionals = command === 'integrations' && ['providers', 'list', 'create'].includes(action) ? 2 : command === 'workflows' && action === 'webhook' ? 4 : command === 'attempts' && action === 'files' ? (id === 'download' ? 5 : 4) : ['guide', 'exec'].includes(command) ? 1 : ['list', 'read'].includes(command) ? 2 : 3
+  const maxPositionals = command === 'call' ? 2 : command === 'tools' && action === 'list' ? 2 : command === 'integrations' && ['providers', 'list', 'create'].includes(action) ? 2 : command === 'workflows' && action === 'webhook' ? 4 : command === 'attempts' && action === 'files' ? (id === 'download' ? 5 : 4) : ['guide', 'exec'].includes(command) ? 1 : ['list', 'read'].includes(command) ? 2 : 3
 
   if (positionals.length > maxPositionals)
     throw new Error('Unexpected positional argument. Use --help for command syntax.')
@@ -485,7 +498,7 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
           headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json', ...uploadHeaders },
           ...(uploadStream ? { body: uploadStream, duplex: 'half' } : next.body !== undefined ? { body: JSON.stringify(next.body) } : {}),
           redirect: 'error',
-          signal: AbortSignal.timeout(120000),
+          signal: AbortSignal.timeout(next.path === '/code/execute' || next.path?.endsWith('/call') ? 420000 : 120000),
         })
       }
       finally {
@@ -494,6 +507,9 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
 
       if (next.binary && response.ok)
         return { response }
+
+      if (next.requiresCapabilities && [404, 405].includes(response.status))
+        throw new Error('This Gondo server does not support CLI 0.2.0 shared capabilities. Deploy the matching app release before using this command.')
 
       const text = await response.text()
       let result
@@ -505,6 +521,8 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
         throw new Error(`Runtime returned non-JSON (HTTP ${response.status}). Check GONDO_API_URL points to the runtime.`)
       }
 
+      if (next.requiresCapabilities && response.ok && result?.version !== next.requiresCapabilities)
+        throw new Error('This Gondo server has an incompatible capability version. Deploy the app release supporting CLI 0.2.0.')
       return { response, result }
     }
 
@@ -621,7 +639,7 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
     }
 
     let received = await send(request)
-    if (request.path === '/code/execute')
+    if (request.path === '/code/execute' || received.result?.executionId)
       recovery = { sessionId: received.result?.sessionId, executionId: received.result?.executionId }
 
     if (request.outputDir && received.result?.files?.length) {
@@ -717,7 +735,7 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
     if (request?.secretOutput && secretHandle && !secretWritten)
       message += ' Webhook state may have changed; inspect it before explicitly rotating again. No automatic retry was performed.'
 
-    stderr.write(`${JSON.stringify({ error: message, ...(request?.path === '/code/execute' ? { sessionId: request.body?.sessionId, ...recovery, recovery: 'Inspect the session and execution before continuing; do not repeat this execution automatically.' } : {}) })}\n`)
+    stderr.write(`${JSON.stringify({ error: message, ...(request?.path === '/code/execute' || request?.body?.sessionId || recovery ? { sessionId: request.body?.sessionId, ...recovery, recovery: 'Inspect the session and execution before continuing; do not repeat this execution automatically.' } : {}) })}\n`)
 
     return 1
   }

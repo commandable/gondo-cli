@@ -1,118 +1,48 @@
 # Gondo CLI
 
-Give a coding agent access to [Gondo](https://www.gondo.ai) to create employees, build and test their jobs, and inspect results. The CLI calls Gondo's HTTP API and loads its current authoring guide from the service.
+Use Gondo Admin capabilities from a coding agent or terminal. Requires Node.js 22.12+, a Gondo account with Pro access, and an API key created by an account admin.
 
-Requires **Node.js 22.12 or later** and a Gondo API key. API access requires Pro, an active Pro trial, or complimentary Pro. Installing the CLI does not enable API access.
+## Start
 
-## Get started
+Save `GONDO_API_KEY=…` in a private `gondo.env` file outside source control, then run:
 
-1. In Gondo, open **Account → API keys** and create a key. This requires an account admin. The key is all your agent needs.
-2. Save the key in a local file called `gondo.env`, outside your source repository:
-
-   ```dotenv
-   GONDO_API_KEY=your-api-key
-   ```
-
-3. From any directory, read the guide:
-
-   ```bash
-   npx --yes @gondoai/cli --env-file /absolute/path/to/gondo.env guide
-   ```
-
-No Gondo app checkout is needed. To install a persistent `gondo` command instead:
-
-```bash
-npm install --global @gondoai/cli
-gondo --env-file /absolute/path/to/gondo.env guide
+```sh
+npx --yes @gondoai/cli@0.2.0 --env-file /absolute/path/gondo.env guide
 ```
 
-`--env-file` accepts dotenv syntax, including quoted values. Existing environment variables take precedence over the file. If `GONDO_API_KEY` is already set in your agent's environment, omit the flag. The CLI never loads an env file implicitly. It connects to `https://runtime.gondo.ai` and discovers the account belonging to your key automatically. For development, set `GONDO_API_URL` to another runtime; `GONDO_ACCOUNT_ID` remains an optional override for existing setups. Overrides do not change which account a key can access.
+The key identifies its account automatically. Optional `GONDO_API_URL` and `GONDO_ACCOUNT_ID` overrides support development. Environment variables override the explicitly selected env file. Never paste credentials into prompts or command arguments.
 
-Keep the key out of prompts, source control, and shared logs. Give your agent the local env-file path, not the key text. Connect required integrations using the setup commands below or in Gondo; enable Public browsing for public websites.
+## Shared capabilities
 
-## Give this to your agent
-
-Use a coding agent with terminal access, such as Codex or Claude Code. Replace the task and local file path:
-
-> Use Gondo to build an employee that **[describe the task]**. Your credentials are in **[/absolute/path/to/gondo.env]**; do not print them. Start by running `npx --yes @gondoai/cli --env-file /absolute/path/to/gondo.env guide`. Read the workflow and node guides as directed, then inspect the available integrations. Create a new employee and job, validate it, test with **[agreed inputs]**, and inspect the actual run output. Publish the new job while leaving it disabled for my review. Do not change existing jobs or send messages unless my task explicitly requires it. Report the employee and job IDs and the test results.
-
-Commands shown as `gondo …` in the served guide can all be run as `npx --yes @gondoai/cli --env-file /absolute/path/to/gondo.env …`. If an older guide mentions `pnpm gondo` or the app checkout, use this npm command instead.
-
-## Useful commands
-
-After a global install, with credentials in `gondo.env`:
-
-```bash
-gondo --env-file ./gondo.env guide --topic workflows
-gondo --env-file ./gondo.env guide --topic nodes
-gondo --env-file ./gondo.env list /integrations
-gondo --env-file ./gondo.env employees list
-gondo --env-file ./gondo.env workflows list
+```sh
+gondo tools list
+gondo tools describe gondo_upsert_workflow_node
+gondo call gondo_upsert_workflow_node --file arguments.json
+gondo call load_skill --file skill.json --session os_existing
+gondo workflows get <id> --source active --format json
 gondo --help
-gondo --version
 ```
 
-The command name remains `workflows`; Gondo calls them jobs in the app. The guide documents authoring, execution, file upload/download, resumable workspaces, browser login handoffs, and run inspection. Human approvals are completed by a signed-in person in Gondo.
+The server supplies Admin's existing guides, tool names, descriptions and schemas. The CLI contains no separate authoring manual. `guide --topic workflows` returns the authoritative workflow bundle. Convenience commands adapt to the same operations. Workflow reads return one definition; use `--editor-state` explicitly for the complete editor state.
 
-API responses are JSON. Exit codes: **0** success, **1** failure, **2** user action required. Tests and investigation code execute real actions through your connected integrations. The CLI does not retry mutations automatically; inspect the run or execution after a timeout before trying again.
+Use the host's native web search, delegation and authorization. Required workflow human reviews and login stay in signed-in Gondo; interactive calls return action links. File tools return session artifacts; download inspection images and view them in the host before making visual claims.
 
-## Development and publishing
+Integration management requires `integrations:manage`. Creation follows Admin defaults. Change availability explicitly with `integrations enable|disable <id>`. Submit credentials using `integrations credentials <id> --file <private-file>` or stdin. Credential replacement never implicitly enables a connection. Custom API, custom-tool and browser management are available through the shared catalog.
 
-The service must support `GET /api/operator/me` before publishing this key-only CLI release. That endpoint authenticates the key and returns its account; the Pro requirements still apply.
+Responses are JSON. Exit codes: **0** success, **1** failure, **2** action required. Mutations are never automatically retried. After an uncertain write, inspect its run or execution before proceeding. Existing session, binary transfer, private webhook output and attempt download commands remain available through `--help`.
 
-This repository owns the standalone CLI. Workflow schemas, authoring guides, and authorization remain in the Gondo service. The initial client was extracted from the app's existing operator CLI; it has one runtime dependency and no build step.
+## Development and release
 
-```bash
+```sh
 npm ci
 npm test
-```
-
-Tests exercise the packed npm artifact installed in a separate temporary directory, including its executable, env-file loading, HTTP authentication, and YAML requests. No Gondo credentials or live account are required.
-
-To publish the prepared `@gondoai/cli@0.1.0` release, sign in with an npm account that can publish to the `gondoai` organisation:
-
-```bash
-npm login
-npm whoami
 npm pack --dry-run
-npm publish --access public
 ```
 
-Publishing runs the tests again. Complete npm's authentication/2FA prompt when requested. Then verify the registry install from any other directory:
+Tests include an installed packed artifact, authenticated HTTP transport, server capability-version checks, private credential files and binary downloads.
 
-```bash
-npx --yes @gondoai/cli@0.1.0 --version
-npx --yes @gondoai/cli@0.1.0 --env-file /absolute/path/to/gondo.env guide
-```
+**Deploy the paired app release exposing capability protocol version 2 before publishing CLI 0.2.0.** This release requires `/operator/tools` and the shared `/operator/guide`; discovery on an older server fails clearly without falling back to stale instructions. This is the initial supported CLI contract; older CLI releases are not supported.
 
-`0.1.0` is prepared for its first publication; it is not published by creating or pushing this repository. The npm package is `@gondoai/cli`; its installed executable is `gondo`. Future releases need a new version number. The package is public with no open-source license grant (`UNLICENSED`).
+The [shared implementation brief](https://github.com/commandable/commandable-app-v1/blob/main/docs/unified-authoring.md) documents the paired app change and verification.
 
-## Connection setup and API-key scopes
-
-All keys have `operator` access. In Account → API keys, admins can additionally select **Manage integrations** (`integrations:manage`) when creating a key. Existing keys do not gain this permission automatically; create a replacement and revoke the old key to change permissions. Ordinary keys can already use connected APIs, including writes; this additional scope controls connection setup, not provider API permissions. Keys cannot grant scopes or approve human reviews.
-
-```sh
-gondo integrations providers
-gondo integrations provider clio
-gondo integrations create --provider clio --name "Demo Clio"
-gondo integrations credentials <id> --file ./private-credentials.json --variant <variant>
-gondo integrations test <id>
-gondo integrations enable <id>
-```
-
-Only prebuilt providers with supplied credentials are supported. Credential JSON/YAML must match the displayed schema; `--file -` reads stdin. Do not pass secret values as arguments. Connections start disabled, and enablement is explicit. Replacement credentials are validated separately before an atomic switch; failed checks leave live credentials untouched. Concurrent replacements return a conflict rather than overwriting each other. `checked: false` means no provider check was available. Use `integrations list|get <id>`, `disable <id>`, or `update <id> --file settings.json` (fields: `label`, `maxScope`, `enabledToolsets`, `disabledTools`). Provider metadata lists valid tool names; `maxScope` accepts `read`, `write`, `admin`. These settings govern named tools, not direct API code.
-
-## Webhooks and workflow documents
-
-```sh
-gondo workflows webhook get <workflow-id>
-gondo workflows webhook configure <workflow-id> --output ./private-webhook.json
-gondo attempts files list <attempt-id>
-gondo attempts files download <attempt-id> <artifact-id> --output-dir ./outputs
-```
-
-Webhook configuration requires a new private output file and never prints its secret. Repeating `configure` preserves existing credentials; explicitly use `rotate-secret` with another output file to replace a lost secret. Trigger the returned URL with curl using its `headerName` and `secret`, then inspect runs. No mutations are automatically retried.
-
-Workflow downloads target an attempt, not a CLI workspace session. Downloads refuse unsafe filenames or overwrites, remove partial files, verify available size/checksum metadata and cap files without size metadata at 512 MiB. Storage requests never carry the Gondo API key.
-
-Deploy the backend API-key scope migration and matching runtime before releasing this CLI. No SharePoint file-transfer changes are part of this release.
+After that deployment, an authorized npm maintainer can publish with `npm publish --access public`. Creating or merging these PRs does not itself publish the npm package.

@@ -48,7 +48,7 @@ test('the published artifact works without an app checkout', async (t) => {
     response.setHeader('Content-Type', 'application/json')
     response.end(JSON.stringify(request.url === '/api/operator/me'
       ? { accountId: 'trial-account' }
-      : { ok: true, guide: 'Read the workflow and node guides.' }))
+      : { version: 2, ok: true, guide: 'Read the workflow and node guides.' }))
   })
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
@@ -78,8 +78,8 @@ test('the published artifact works without an app checkout', async (t) => {
     await writeFile(join(directory, 'employee.yaml'), 'name: Trial employee\nrole: Researcher\nallowedIntegrationRefs: []\n')
     await invoke(['--env-file', './gondo.env', 'employees', 'create', '--file', 'employee.yaml'])
     assert.deepEqual(requests.at(-1), {
-      url: '/api/accounts/trial-account/employees', method: 'POST', authorization: 'Bearer fake-test-key',
-      body: { name: 'Trial employee', role: 'Researcher', allowedIntegrationRefs: [] },
+      url: '/api/accounts/trial-account/operator/tools/create_employee/call', method: 'POST', authorization: 'Bearer fake-test-key',
+      body: { arguments: { name: 'Trial employee', role: 'Researcher', allowed_integration_refs: [] } },
     })
   })
 
