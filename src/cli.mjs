@@ -99,6 +99,15 @@ function segment(value, label = 'ID') {
   return encodeURIComponent(result)
 }
 
+function positiveInteger(value, label) {
+  const text = value.trim()
+  const number = Number(text)
+  if (!/^\d+$/.test(text) || !Number.isSafeInteger(number) || number <= 0)
+    throw new Error(`${label} must be a positive safe integer`)
+
+  return number
+}
+
 async function readStructured(file, stdin = process.stdin) {
   required(file, '--file or --input')
   let source
@@ -175,7 +184,7 @@ export async function buildRequest(argv, { stdin = process.stdin } = {}) {
   else if (command === 'list' || command === 'read') {
     call(command === 'list' ? 'gondo_list' : 'gondo_read', {
       path: command === 'read' ? required(action, 'namespace path') : action ?? '/',
-      ...(command === 'list' && values.limit ? { limit: Number(values.limit) } : {}),
+      ...(command === 'list' && values.limit !== undefined ? { limit: positiveInteger(values.limit, '--limit') } : {}),
     })
   }
   else if (command === 'exec') {
@@ -310,19 +319,20 @@ export async function buildRequest(argv, { stdin = process.stdin } = {}) {
     else if (action === 'create')
       call('create_new_workflow', { employee_id: required(values.employee, '--employee'), suggested_name: required(values.name, '--name') })
     else {
-      const base = `/workflows/${segment(id)}`
+      const workflowId = required(id, 'workflow ID')
+      const base = `/workflows/${segment(workflowId)}`
       if (action === 'get')
         call('gondo_read', { path: base }, { source: values.source ?? 'active', format: values.format ?? 'json', editorState: values['editor-state'] ?? false })
       else if (action === 'save-draft') {
         const body = await definitionBody(values.file)
-        call('gondo_put_workflow', { op: 'replace', workflow_id: id, definition_yaml: body.definitionYaml ?? stringify(body.definition) })
+        call('gondo_put_workflow', { op: 'replace', workflow_id: workflowId, definition_yaml: body.definitionYaml ?? stringify(body.definition) })
       }
       else if (action === 'publish')
-        call('gondo_publish_workflow', { workflow_id: id })
+        call('gondo_publish_workflow', { workflow_id: workflowId })
       else if (action === 'rename')
-        call('gondo_update_workflow_settings', { workflow_id: id, name: required(values.name, '--name') })
+        call('gondo_update_workflow_settings', { workflow_id: workflowId, name: required(values.name, '--name') })
       else if (action === 'validate' && !values.file && !values.source)
-        call('gondo_validate_workflow', { workflow_id: id })
+        call('gondo_validate_workflow', { workflow_id: workflowId })
       else {
         const routes = {
           'discard-draft': ['DELETE', '/draft'],
@@ -350,8 +360,8 @@ export async function buildRequest(argv, { stdin = process.stdin } = {}) {
     if (action === 'list') {
       request.path = '/runs'
 
-      if (values.limit)
-        request.query.limit = values.limit
+      if (values.limit !== undefined)
+        request.query.limit = positiveInteger(values.limit, '--limit')
     }
     else if (action === 'test' || action === 'start') {
       request.path = '/runs'
@@ -439,6 +449,7 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
   let request
   let secretHandle
   let secretWritten = false
+  let toolCallStarted = false
   try {
     request = await buildRequest(argv, { stdin })
 
@@ -493,6 +504,8 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
       let response
 
       try {
+        if (next.path.startsWith('/operator/tools/') && next.path.endsWith('/call'))
+          toolCallStarted = true
         response = await fetchImpl(url, {
           method: next.method,
           headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json', ...uploadHeaders },
@@ -735,7 +748,7 @@ export async function runCli(argv, { env = process.env, fetchImpl = fetch, stdou
     if (request?.secretOutput && secretHandle && !secretWritten)
       message += ' Webhook state may have changed; inspect it before explicitly rotating again. No automatic retry was performed.'
 
-    stderr.write(`${JSON.stringify({ error: message, ...(request?.path === '/code/execute' || request?.body?.sessionId || recovery ? { sessionId: request.body?.sessionId, ...recovery, recovery: 'Inspect the session and execution before continuing; do not repeat this execution automatically.' } : {}) })}\n`)
+    stderr.write(`${JSON.stringify({ error: message, ...(toolCallStarted || request?.path === '/code/execute' || request?.body?.sessionId || recovery ? { sessionId: request.body?.sessionId, ...recovery, recovery: toolCallStarted ? 'The tool call may have changed state. Inspect the affected resources and any session or execution before continuing; do not repeat this call automatically.' : 'Inspect the session and execution before continuing; do not repeat this execution automatically.' } : {}) })}\n`)
 
     return 1
   }

@@ -15,17 +15,17 @@ The key identifies its account automatically. Optional `GONDO_API_URL` and `GOND
 ## Shared capabilities
 
 ```sh
-gondo tools list
-gondo tools describe gondo_upsert_workflow_node
-gondo call gondo_upsert_workflow_node --file arguments.json
-gondo call load_skill --file skill.json --session os_existing
-gondo workflows get <id> --source active --format json
-gondo --help
+npx --yes @gondoai/cli@0.2.0 --env-file /absolute/path/gondo.env tools list
+npx --yes @gondoai/cli@0.2.0 --env-file /absolute/path/gondo.env tools describe gondo_upsert_workflow_node
+npx --yes @gondoai/cli@0.2.0 --env-file /absolute/path/gondo.env call gondo_upsert_workflow_node --file arguments.json
+npx --yes @gondoai/cli@0.2.0 --env-file /absolute/path/gondo.env call load_skill --file skill.json --session os_existing
+npx --yes @gondoai/cli@0.2.0 --env-file /absolute/path/gondo.env workflows get <id> --source active --format json
+npx --yes @gondoai/cli@0.2.0 --help
 ```
 
 The server supplies Admin's existing guides, tool names, descriptions and schemas. The CLI contains no separate authoring manual. `guide --topic workflows` returns the authoritative workflow bundle. Convenience commands adapt to the same operations. Workflow reads return one definition; use `--editor-state` explicitly for the complete editor state.
 
-Use the host's native web search, delegation and authorization. Required workflow human reviews and login stay in signed-in Gondo; interactive calls return action links. File tools return session artifacts; download inspection images and view them in the host before making visual claims.
+Use the host's native web search, delegation and authorization. The catalog preserves Admin's `requireConfirmation` flag; the host applies its authorization policy before invocation, including authorization already given by the user. Required workflow human reviews and login stay in signed-in Gondo; interactive calls return action links. File tools return session artifacts; download inspection images and view them in the host before making visual claims.
 
 Integration management requires `integrations:manage`. Creation follows Admin defaults. Change availability explicitly with `integrations enable|disable <id>`. Submit credentials using `integrations credentials <id> --file <private-file>` or stdin. Credential replacement never implicitly enables a connection. Custom API, custom-tool and browser management are available through the shared catalog.
 
