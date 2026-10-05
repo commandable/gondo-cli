@@ -1,5 +1,5 @@
 {
-  "name": "gondo",
+  "name": "@gondoai/cli",
   "version": "0.1.0",
   "description": "Let coding agents build, test, and manage employees and jobs on Gondo.",
   "type": "module",

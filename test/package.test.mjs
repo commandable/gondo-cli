@@ -19,6 +19,7 @@ test('the published artifact works without an app checkout', async (t) => {
 
   const { stdout } = await exec(npm, ['pack', '--json', '--ignore-scripts', '--pack-destination', directory], { cwd: root })
   const [packed] = JSON.parse(stdout)
+  assert.equal(packed.name, '@gondoai/cli')
   assert.deepEqual(packed.files.map(file => file.path).sort(), [
     'README.md', 'bin/gondo.mjs', 'gondo.env.example', 'package.json', 'src/cli.mjs',
   ])
@@ -26,7 +27,7 @@ test('the published artifact works without an app checkout', async (t) => {
 
   // Exercise the npm-created executable, including its symlink on Unix.
   const bin = process.platform === 'win32'
-    ? join(directory, 'node_modules/gondo/bin/gondo.mjs')
+    ? join(directory, 'node_modules/@gondoai/cli/bin/gondo.mjs')
     : join(directory, 'node_modules/.bin/gondo')
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GONDO_')))
   const invoke = (args, extraEnv = {}) => exec(process.execPath, [bin, ...args], { cwd: directory, env: { ...env, ...extraEnv } })
@@ -35,7 +36,7 @@ test('the published artifact works without an app checkout', async (t) => {
     assert.match((await invoke(['--help'])).stdout, /gondo --env-file/)
     const { version } = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
     assert.equal((await invoke(['--version'])).stdout.trim(), version)
-    const installed = await exec(npm, ['exec', '--offline', '--', 'gondo', '--version'], { cwd: directory, env })
+    const installed = await exec(npm, ['exec', '--offline', '--', '@gondoai/cli', '--version'], { cwd: directory, env })
     assert.equal(installed.stdout.trim(), version)
   })
 
