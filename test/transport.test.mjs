@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { readFile, stat, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { parse } from 'yaml'
 import { buildRequest, safeDownloadName } from '../src/cli.mjs'
 import { createRunner, directory } from '../test-support/cli.mjs'
 
@@ -40,7 +41,7 @@ for (const account of ['../other', 'a/b', '.', '..']) {
 }
 for (const url of ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://[::1]:3000']) {
   test(`supports loopback runtime: ${url}`, async () => {
-    assert.equal((await invoke(['guide'], async () => Response.json({ guide: 'ok' }), { env: { GONDO_API_URL: url } })).code, 0)
+    assert.equal((await invoke(['guide'], async () => Response.json({ version: 2, guide: 'ok' }), { env: { GONDO_API_URL: url } })).code, 0)
   })
 }
 for (const [status, body] of [[503, { message: 'Unavailable' }], [200, { success: false }], [200, { ok: false }]]) {
@@ -77,13 +78,13 @@ test('run commands resolve one current attempt and cancellation never retries', 
 test('request construction preserves source files and export writes private YAML', async t => {
   const dir = await directory(t)
   const code = join(dir, 'code.js'); await writeFile(code, 'return { ready: true }')
-  assert.deepEqual((await buildRequest(['exec', '--file', code, '--integrations', 'crm, crm_two'])).body, { code: 'return { ready: true }', integrations: ['crm', 'crm_two'] })
+  assert.deepEqual((await buildRequest(['exec', '--file', code, '--integrations', 'crm, crm_two'])).body, { code: 'return { ready: true }', channels: [], integrations: ['crm', 'crm_two'] })
   const yaml = join(dir, 'workflow.yaml'); await writeFile(yaml, 'version: 3\nnodes: {}\nedges: []\n')
-  assert.deepEqual((await buildRequest(['workflows', 'save-draft', 'wf', '--file', yaml])).body, { definitionYaml: await readFile(yaml, 'utf8') })
+  assert.deepEqual((await buildRequest(['workflows', 'save-draft', 'wf', '--file', yaml])).body, { arguments: { op: 'replace', workflow_id: 'wf', definition_yaml: await readFile(yaml, 'utf8') } })
   const json = join(dir, 'workflow.json'); await writeFile(json, '{"nodes":{},"edges":[],"version":3}')
-  assert.deepEqual((await buildRequest(['workflows', 'save-draft', 'wf', '--file', json])).body, { definition: { nodes: {}, edges: [], version: 3 } })
+  assert.deepEqual(parse((await buildRequest(['workflows', 'save-draft', 'wf', '--file', json])).body.arguments.definition_yaml), { nodes: {}, edges: [], version: 3 })
   assert.deepEqual((await buildRequest(['runs', 'start', 'wf'])).body, { workflowId: 'wf', useDraft: false, startAsync: true, triggerData: {} })
-  assert.deepEqual((await buildRequest(['list', '/runs', '--limit', '10'])).query, { action: 'list', path: '/runs', limit: '10' })
+  assert.deepEqual((await buildRequest(['list', '/runs', '--limit', '10'])).body, { arguments: { path: '/runs', limit: 10 } })
   const output = join(dir, 'export.yaml')
   assert.equal((await invoke(['workflows', 'export', 'wf', '--output', output], async () => Response.json({ yaml: 'version: 3\n' }))).code, 0)
   assert.equal(await readFile(output, 'utf8'), 'version: 3\n')

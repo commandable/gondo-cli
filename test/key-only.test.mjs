@@ -8,7 +8,7 @@ test('a key alone discovers its account on the production runtime', async () => 
   const calls = []
   const result = await invoke(['guide'], async (url, init) => {
     calls.push({ url: String(url), method: init.method, authorization: init.headers.Authorization })
-    return Response.json(calls.length === 1 ? { accountId: 'my-account' } : { guide: 'Build a job.' })
+    return Response.json(calls.length === 1 ? { accountId: 'my-account' } : { version: 2, guide: 'Build a job.' })
   })
   assert.equal(result.code, 0)
   assert.equal(JSON.parse(result.stdout).guide, 'Build a job.')
@@ -55,7 +55,7 @@ test('an existing account override skips discovery', async () => {
   const urls = []
   const result = await invoke(['guide'], async (url) => {
     urls.push(String(url))
-    return Response.json({ guide: 'Existing configuration.' })
+    return Response.json({ version: 2, guide: 'Existing configuration.' })
   }, { env: { GONDO_ACCOUNT_ID: 'existing-account' } })
   assert.equal(result.code, 0)
   assert.deepEqual(urls, ['https://runtime.gondo.ai/api/accounts/existing-account/operator/guide?topic=overview'])

@@ -11,7 +11,7 @@ const invoke = createRunner({ GONDO_API_KEY: 'fake-key', GONDO_ACCOUNT_ID: 'acco
 
 test('routes nested setup commands', async () => {
   assert.equal((await buildRequest(['integrations', 'provider', 'clio'])).path, '/operator/integrations/providers/clio')
-  assert.deepEqual((await buildRequest(['integrations', 'create', '--provider', 'clio', '--name', 'Demo'])).body, { providerKey: 'clio', label: 'Demo' })
+  assert.deepEqual((await buildRequest(['integrations', 'create', '--provider', 'clio', '--name', 'Demo'])).body, { arguments: { type: 'clio', label: 'Demo' } })
   assert.equal((await buildRequest(['workflows', 'webhook', 'get', 'wf'])).path, '/workflows/wf/webhook/connection')
   assert.equal((await buildRequest(['attempts', 'files', 'list', 'attempt'])).path, '/run-attempts/attempt')
 })

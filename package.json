@@ -1,6 +1,6 @@
 {
   "name": "@gondoai/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Let coding agents build, test, and manage employees and jobs on Gondo.",
   "type": "module",
   "license": "UNLICENSED",
